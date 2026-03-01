@@ -1,0 +1,20 @@
+# 1. Credentials / Secrets
+.env
+
+# 2. Clasp config (To prevent accidental overwrite to prod and keep local dev safe)
+.clasp.json
+
+# 3. Node modules
+node_modules/
+
+# 4. Testing artifacts (Playwright)
+playwright-report/
+test-results/
+
+# 5. OS / Editor files
+.DS_Store
+.vscode/
+*.log
+
+# 6. Agent files
+.agent/ 

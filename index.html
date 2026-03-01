@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>日次コンディション・ダッシュボード</title>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 外部CSSのインクルード -->
+    <?!= include('css'); ?>
+  </head>
+
+  <body>
+    <div class="dashboard-container">
+      <header class="header">
+        <h1>日次コンディション・ダッシュボード</h1>
+        <p class="subtitle">Daily Condition & Learning Log Visualization</p>
+      </header>
+
+      <!-- ローディング表示 -->
+      <div id="loading" class="loading-overlay">
+        <div class="spinner"></div>
+        <p>データを読み込んでいます...</p>
+      </div>
+
+      <div id="main-content" class="hidden">
+        <!-- 期間フィルター -->
+        <div class="filter-container">
+          <span class="filter-label">表示期間：</span>
+          <div class="filter-buttons">
+            <button class="filter-btn active" data-days="14">直近14日間</button>
+            <button class="filter-btn" data-days="30">直近1ヶ月</button>
+            <button class="filter-btn" data-days="90">直近3ヶ月</button>
+            <button class="filter-btn" data-days="all">全期間</button>
+          </div>
+        </div>
+
+        <!-- タブナビゲーション -->
+        <nav class="tabs">
+          <button class="tab-btn active" data-target="tab-summary">
+            安定就労・コンディション分析（要約）
+          </button>
+          <button class="tab-btn" data-target="tab-logs">
+            日次ログ詳細と更新
+          </button>
+        </nav>
+
+        <!-- タブ1: 要約ダッシュボード -->
+        <section id="tab-summary" class="tab-pane active">
+          <div class="kpi-cards">
+            <div class="card kpi-card">
+              <h3>体調（普通以上）維持率</h3>
+              <p id="kpi-condition" class="kpi-value">--%</p>
+            </div>
+            <div class="card kpi-card">
+              <h3>平均睡眠時間</h3>
+              <p id="kpi-sleep" class="kpi-value">-- 時間</p>
+            </div>
+            <div class="card kpi-card">
+              <h3>通所（事業所）学習率</h3>
+              <p id="kpi-attendance" class="kpi-value">--%</p>
+            </div>
+          </div>
+
+          <div class="charts-grid">
+            <div class="card chart-card">
+              <h3>体調の割合</h3>
+              <div class="chart-wrapper">
+                <canvas id="conditionPieChart"></canvas>
+              </div>
+              <p class="insight-text" id="insight-condition">
+                ※自身の基本コンディション割合を客観視し、コントロールに努めています。
+              </p>
+            </div>
+
+            <div class="card chart-card">
+              <h3>学習場所の割合</h3>
+              <div class="chart-wrapper">
+                <canvas id="locationPieChart"></canvas>
+              </div>
+              <p class="insight-text" id="insight-location"></p>
+            </div>
+
+            <div class="card chart-card full-width">
+              <h3 id="combo-chart-title">睡眠時間と体調の推移（直近14日）</h3>
+              <div class="chart-wrapper">
+                <canvas id="sleepConditionComboChart"></canvas>
+              </div>
+              <p class="insight-text" id="insight-combo">
+                ※日々の睡眠時間がコンディションに与える影響を確認し、安定したリズムを掴みましょう。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- タブ2: ログ詳細一覧（テーブルと編集機能） -->
+        <section id="tab-logs" class="tab-pane hidden">
+          <div class="card table-card">
+            <div class="table-header">
+              <h3>直近の記録一覧</h3>
+              <p class="instruction">
+                セルをクリックまたはダブルクリックして値を編集し、保存できます。
+              </p>
+            </div>
+            <div class="table-container">
+              <table id="log-table">
+                <thead>
+                  <tr>
+                    <th>日付</th>
+                    <th>体調</th>
+                    <th>睡眠時間</th>
+                    <th>朝のルーティン</th>
+                    <th>学習場所</th>
+                    <th>学習内容</th>
+                    <th>懸念・メモ</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="log-table-body">
+                  <!-- JSで動的に行を生成 -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- トースト通知用エリア -->
+    <div id="toast-container"></div>
+
+    <!-- 外部JavaScriptのインクルード -->
+    <?!= include('js'); ?>
+  </body>
+</html>

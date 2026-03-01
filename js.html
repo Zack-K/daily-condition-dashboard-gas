@@ -1,0 +1,686 @@
+<script>
+  /**
+   * ApiService: APIエンドポイントのラッパー（DI設計）
+   * GAS環境（google.script.run）とローカルテスト環境（window.__mockApi）を吸収する
+   */
+  const ApiService = {
+    getDashboardData: (onSuccess, onFailure) => {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(onSuccess)
+          .withFailureHandler(onFailure)
+          .getDashboardData();
+      } else if (window.__mockApi) {
+        window.__mockApi.getDashboardData(onSuccess, onFailure);
+      } else {
+        console.warn('API Endpoint is not defined.');
+        onFailure({
+          message: 'API Endpoint is not defined in this environment.',
+        });
+      }
+    },
+    updateRecord: (rowId, colKey, newValue, onSuccess, onFailure) => {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(onSuccess)
+          .withFailureHandler(onFailure)
+          .updateRecord(rowId, colKey, newValue);
+      } else if (window.__mockApi) {
+        window.__mockApi.updateRecord(
+          rowId,
+          colKey,
+          newValue,
+          onSuccess,
+          onFailure
+        );
+      } else {
+        onFailure({ message: 'API Endpoint is not defined.' });
+      }
+    },
+  };
+
+  /**
+   * グローバル変数
+   */
+  let appData = {
+    allRecords: [], // GASから取得した全件を保持
+    filteredRecords: [], // 現在表示用に絞り込まれたレコード
+    charts: {}, // 生成したChart.jsインスタンスを保持
+  };
+
+  /**
+   * 初期化（DOMロード完了時）
+   */
+  document.addEventListener('DOMContentLoaded', () => {
+    initTabs();
+    initFilterButtons();
+    fetchData();
+  });
+
+  /**
+   * 期間フィルターボタンの初期化
+   */
+  function initFilterButtons() {
+    const filterBtns = document.querySelectorAll('.filter-btn');
+    filterBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        // UIアクティブ切り替え
+        filterBtns.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // 指定日数を取得
+        const days = btn.getAttribute('data-days');
+        applyTimeFilter(days);
+      });
+    });
+  }
+
+  /**
+   * 指定された日数でallRecordsをフィルタリングし再描画する
+   * @param {string|number} days 'all' または数値（14, 30, 90など）
+   */
+  function applyTimeFilter(days) {
+    if (!appData.allRecords || appData.allRecords.length === 0) return;
+
+    if (days === 'all') {
+      appData.filteredRecords = [...appData.allRecords];
+    } else {
+      const numDays = parseInt(days, 10);
+      const now = new Date();
+      // 期限となる過去の日付を計算
+      const cutoffDate = new Date(now.setDate(now.getDate() - numDays));
+
+      appData.filteredRecords = appData.allRecords.filter((r) => {
+        if (!r.timestamp) return false;
+        const recordDate = new Date(r.timestamp);
+        return recordDate >= cutoffDate;
+      });
+    }
+
+    // 絞り込まれたデータで画面全体を再描画（高速処理）
+    renderKPIs();
+    renderCharts();
+    renderTable();
+  }
+
+  /**
+   * タブ切り替えロジック
+   */
+  function initTabs() {
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabPanes = document.querySelectorAll('.tab-pane');
+
+    tabBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        // アクティブ状態の切り替え
+        tabBtns.forEach((b) => b.classList.remove('active'));
+        tabPanes.forEach((p) => p.classList.add('hidden'));
+
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-target');
+        document.getElementById(targetId).classList.remove('hidden');
+
+        // アクティブなタブに合わせて必要に応じたグラフの再描画（Chart.jsのサイズ調整用）
+        if (targetId === 'tab-summary') {
+          Object.values(appData.charts).forEach((chart) => chart.update());
+        }
+      });
+    });
+  }
+
+  /**
+   * GASバックエンドからデータを取得
+   */
+  function fetchData() {
+    document.getElementById('loading').classList.remove('hidden');
+    document.getElementById('main-content').classList.add('hidden');
+
+    ApiService.getDashboardData(onDataFetched, onFetchError);
+  }
+
+  /**
+   * データ取得成功時のコールバック
+   */
+  function onDataFetched(response) {
+    document.getElementById('loading').classList.add('hidden');
+
+    if (response.status === 'success') {
+      document.getElementById('main-content').classList.remove('hidden');
+
+      // 全データをマスターとして保持
+      appData.allRecords = response.records;
+
+      // 初期表示は「直近14日間」を適用（HTMLのアクティブボタンと同期）
+      applyTimeFilter(14);
+
+      showToast('データを取得しました', 'success');
+    } else {
+      showToast('データ取得エラー: ' + response.message, 'error');
+    }
+  }
+
+  function onFetchError(error) {
+    document.getElementById('loading').classList.add('hidden');
+    showToast('通信エラー: ' + error.message, 'error');
+  }
+
+  /**
+   * トースト通知の表示
+   */
+  function showToast(message, type = 'success') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    // アイコンの追加
+    const icon = type === 'success' ? '✓ ' : '⚠ ';
+    toast.textContent = icon + message;
+
+    container.appendChild(toast);
+
+    // 3秒後に消す
+    setTimeout(() => {
+      toast.style.animation = 'slideIn 0.3s ease-in reverse forwards';
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
+  }
+
+  /* =========================================================
+       [人事・DE視点] KPIの計算と描画
+    ========================================================= */
+  function renderKPIs() {
+    // ※ 常に filteredRecords を使用する
+    const records = appData.filteredRecords;
+
+    if (!records || records.length === 0) {
+      document.getElementById('kpi-condition').textContent = `0%`;
+      document.getElementById('kpi-sleep').textContent = `-- 時間`;
+      document.getElementById('kpi-attendance').textContent = `0%`;
+      return;
+    }
+
+    // 1. 体調（普通以上）維持率
+    // 文字列が「普通」「好調」などポジティブなものを含む割合
+    const positiveConditions = ['普通', '好調', '良い'];
+    const validConditionRecords = records.filter((r) => r.condition);
+    const positiveCount = validConditionRecords.filter((r) =>
+      positiveConditions.some((word) => r.condition.includes(word))
+    ).length;
+    const conditionRatio = validConditionRecords.length
+      ? ((positiveCount / validConditionRecords.length) * 100).toFixed(1)
+      : 0;
+    document.getElementById('kpi-condition').textContent = `${conditionRatio}%`;
+
+    // 2. 平均睡眠時間
+    // I列（G~I列）に正しく数値が入っているレコードのみを対象とする
+    const validSleepRecords = records.filter(
+      (r) => typeof r.sleepHours === 'number' && !isNaN(r.sleepHours)
+    );
+    const totalSleep = validSleepRecords.reduce(
+      (sum, r) => sum + r.sleepHours,
+      0
+    );
+    const avgSleep = validSleepRecords.length
+      ? (totalSleep / validSleepRecords.length).toFixed(1)
+      : 0;
+    document.getElementById('kpi-sleep').textContent = validSleepRecords.length
+      ? `${avgSleep} 時間`
+      : '-- 時間';
+
+    // 3. 通所（事業所）学習率
+    const validLocationRecords = records.filter((r) => r.location);
+    const officeCount = validLocationRecords.filter(
+      (r) => r.location.includes('事業所') || r.location.includes('通所')
+    ).length;
+    const officeRatio = validLocationRecords.length
+      ? ((officeCount / validLocationRecords.length) * 100).toFixed(1)
+      : 0;
+    document.getElementById('kpi-attendance').textContent = `${officeRatio}%`;
+  }
+
+  /* =========================================================
+       [人事・DE視点] Chart.jsを用いた各種グラフの描画
+    ========================================================= */
+  function renderCharts() {
+    // ※ 常に filteredRecords を使用する
+    const records = appData.filteredRecords;
+    if (!records || records.length === 0) {
+      // 表示データが0件の場合はグラフをクリアする等の処理（今回は単純なdestroyで空表示とする）
+      Object.values(appData.charts).forEach((chart) => chart.destroy());
+      appData.charts = {};
+      return;
+    }
+
+    // 共通のフォント設定
+    Chart.defaults.font.family = "'Inter', sans-serif";
+    Chart.defaults.color = '#6B7280';
+
+    // 既存のチャートを破棄（再描画時）
+    Object.values(appData.charts).forEach((chart) => chart.destroy());
+
+    /* --- 1. 体調の集計（横棒グラフ） --- */
+    const conditionOrder = [
+      '特記事項なし(絶好調)',
+      '好調',
+      '良い',
+      '普通',
+      '不調',
+      '悪い',
+      '特記事項なし(絶不調)',
+      '未記入',
+    ];
+
+    const conditionCounts = records.reduce((acc, r) => {
+      const condition = r.condition || '未記入';
+      acc[condition] = (acc[condition] || 0) + 1;
+      return acc;
+    }, {});
+
+    // 狙った順序でソート
+    const conditionLabels = Object.keys(conditionCounts).sort((a, b) => {
+      let indexA = conditionOrder.findIndex((cond) => a.includes(cond));
+      let indexB = conditionOrder.findIndex((cond) => b.includes(cond));
+      if (indexA === -1) indexA = 999;
+      if (indexB === -1) indexB = 999;
+      return indexA - indexB; // 昇順
+    });
+
+    const conditionData = conditionLabels.map(
+      (label) => conditionCounts[label]
+    );
+
+    // 心理的安全性に配慮した配色（ブルー、グレー、マイルドなコーラル等）
+    const conditionColors = conditionLabels.map((label) => {
+      if (
+        label.includes('好調') ||
+        label.includes('良い') ||
+        label.includes('絶好調')
+      )
+        return '#60A5FA';
+      if (
+        label.includes('不調') ||
+        label.includes('悪い') ||
+        label.includes('絶不調')
+      )
+        return '#F87171';
+      if (label.includes('普通')) return '#9CA3AF';
+      return '#D1D5DB';
+    });
+
+    const ctxCondition = document
+      .getElementById('conditionPieChart')
+      .getContext('2d');
+    appData.charts.condition = new Chart(ctxCondition, {
+      type: 'bar',
+      data: {
+        labels: conditionLabels,
+        datasets: [
+          {
+            label: '記録日数',
+            data: conditionData,
+            backgroundColor: conditionColors,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y', // 横向き棒グラフ
+        plugins: { legend: { display: false } }, // 凡例は不要
+        scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } },
+      },
+    });
+
+    /* --- 2. 学習場所の集計（横棒グラフ） --- */
+    const locationCounts = records.reduce((acc, r) => {
+      const loc = r.location || '未記入';
+      acc[loc] = (acc[loc] || 0) + 1;
+      return acc;
+    }, {});
+
+    // 件数が多い順に降順ソート
+    const locationLabels = Object.keys(locationCounts).sort(
+      (a, b) => locationCounts[b] - locationCounts[a]
+    );
+    const locationData = locationLabels.map((label) => locationCounts[label]);
+
+    function getLocationColors(labels) {
+      return labels.map((label) => {
+        if (label.includes('事業所') || label.includes('通所')) {
+          return '#34D399'; // エメラルドグリーン（より落ち着いた活発さ）
+        } else if (label.includes('在宅')) {
+          return '#818CF8'; // インディゴブルー
+        } else {
+          return '#9CA3AF';
+        }
+      });
+    }
+    const locationBgColors = getLocationColors(locationLabels);
+
+    const ctxLocation = document
+      .getElementById('locationPieChart')
+      .getContext('2d');
+    appData.charts.location = new Chart(ctxLocation, {
+      type: 'bar',
+      data: {
+        labels: locationLabels,
+        datasets: [
+          {
+            label: '記録日数',
+            data: locationData,
+            backgroundColor: locationBgColors,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } },
+      },
+    });
+
+    /* --- 3. 睡眠時間と体調スコア推移（複合グラフ）フィルターされた全期間 --- */
+    // ※以前は「直近14件固定」だったが、フィルターされた全件を対象にする
+    const recentRecords = [...records].reverse(); // 過去から現在への並び
+    const dates = recentRecords.map((r) =>
+      r.timestamp
+        ? new Date(r.timestamp).toLocaleDateString('ja-JP', {
+            month: 'numeric',
+            day: 'numeric',
+          })
+        : '不明'
+    );
+    const sleepData = recentRecords.map((r) => r.sleepHours || 0);
+
+    // 体調スコア化（折れ線グラフ用）
+    // G列(気力), H列(体力) の数値が入力されている場合はその平均を算出し、指定のルールでスコアリング
+    const conditionScores = recentRecords.map((r) => {
+      let score = null;
+
+      // 気力・体力が両方、または片方入力されている場合
+      if (typeof r.vitality === 'number' || typeof r.stamina === 'number') {
+        const v = typeof r.vitality === 'number' ? r.vitality : null;
+        const s = typeof r.stamina === 'number' ? r.stamina : null;
+
+        let avgNumeric;
+        if (v !== null && s !== null) {
+          avgNumeric = (v + s) / 2;
+        } else {
+          avgNumeric = v !== null ? v : s;
+        }
+
+        // 数値に基づくスコアリングルール (6〜5: 好調=5, 4〜3: 普通=3(要件上は不調だがグラフの連続性として中間に), 2以下: 絶不調=1)
+        // ユーザー要件: "6〜5の時好調(5)、4~3は不調(3に変更して差異を出す)、2以下は絶不調(1)"
+        if (avgNumeric >= 5) score = 5;
+        else if (avgNumeric >= 3) score = 3;
+        else score = 1;
+      }
+
+      // G,H列が未入力の場合は、従来のB列（キスト）ベースの評価にフォールバック
+      if (score === null) {
+        if (r.condition.includes('好調')) score = 5;
+        else if (r.condition.includes('良い')) score = 4;
+        else if (r.condition.includes('普通')) score = 3;
+        else if (r.condition.includes('不調') || r.condition.includes('悪い'))
+          score = 1;
+        else score = 2;
+      }
+
+      return score;
+    });
+
+    const ctxCombo = document
+      .getElementById('sleepConditionComboChart')
+      .getContext('2d');
+    appData.charts.combo = new Chart(ctxCombo, {
+      type: 'bar',
+      data: {
+        labels: dates,
+        datasets: [
+          {
+            type: 'line',
+            label: '体調スコア (5段階)',
+            data: conditionScores,
+            borderColor: '#60A5FA',
+            backgroundColor: '#60A5FA',
+            borderWidth: 2,
+            tension: 0.3, // 滑らかな曲線
+            yAxisID: 'y1',
+          },
+          {
+            type: 'bar',
+            label: '睡眠時間 (h)',
+            data: sleepData,
+            backgroundColor: 'rgba(129, 140, 248, 0.6)', // Primary Color with opacity
+            borderRadius: 4,
+            yAxisID: 'y',
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            title: { display: true, text: '睡眠時間 (h)' },
+            min: 0,
+            max: 12,
+          },
+          y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            title: { display: true, text: '体調スコア' },
+            min: 0,
+            max: 6,
+            grid: { drawOnChartArea: false }, // 右軸のグリッド線を消す
+          },
+        },
+      },
+    });
+
+    // 動的なインサイトテキストの更新
+    updateInsights(records);
+  }
+
+  /**
+   * データに基づいて動的フィードバック（インサイト）を生成・更新する
+   */
+  function updateInsights(records) {
+    if (!records || records.length === 0) return;
+
+    // 体調のインサイト
+    const positiveConditions = ['普通', '好調', '良い', '絶好調'];
+    const validConditionRecords = records.filter((r) => r.condition);
+    const positiveCount = validConditionRecords.filter((r) =>
+      positiveConditions.some((word) => r.condition.includes(word))
+    ).length;
+    const conditionRatio = validConditionRecords.length
+      ? Math.round((positiveCount / validConditionRecords.length) * 100)
+      : 0;
+
+    let conditionText = `直近の記録では、普通以上のコンディションが ${conditionRatio}％ 維持できています。この調子でいきましょう。`;
+    if (conditionRatio < 50) {
+      conditionText = `少し疲れが溜まっているかもしれません。無理のないペースで休息を取り入れることを意識してみましょう。`;
+    }
+    const conditionInsightEl = document.getElementById('insight-condition');
+    if (conditionInsightEl) conditionInsightEl.textContent = conditionText;
+
+    // 場所のインサイト
+    const validLocationRecords = records.filter((r) => r.location);
+    const officeCount = validLocationRecords.filter(
+      (r) => r.location.includes('事業所') || r.location.includes('通所')
+    ).length;
+    const officeRatio = validLocationRecords.length
+      ? Math.round((officeCount / validLocationRecords.length) * 100)
+      : 0;
+
+    let locationText = `事業所（通所）での学習が ${officeRatio}％ を占めています。通所の継続ができていて素晴らしいです。`;
+    if (officeRatio > 0 && officeRatio < 50) {
+      locationText = `在宅中心の学習ペースになっていますね。ご自身の体調に合わせて、無理のない範囲で進めていきましょう。`;
+    } else if (officeRatio === 0) {
+      locationText = `現在は在宅で学習を進めています。マイペースに継続していきましょう。`;
+    }
+    const locationInsightEl = document.getElementById('insight-location');
+    if (locationInsightEl) locationInsightEl.textContent = locationText;
+
+    // タイトルの更新（直近○日間など）
+    const activeBtn = document.querySelector('.filter-btn.active');
+    const comboTitleEl = document.getElementById('combo-chart-title');
+    if (comboTitleEl && activeBtn) {
+      const daysText = activeBtn.textContent;
+      comboTitleEl.textContent = `睡眠時間と体調の推移（${daysText}）`;
+    }
+  }
+
+  /* =========================================================
+       [編集機能] テーブル表示とインライン編集
+    ========================================================= */
+  function renderTable() {
+    const tbody = document.getElementById('log-table-body');
+    tbody.innerHTML = '';
+
+    // ※ 常に filteredRecords を使用する
+    appData.filteredRecords.forEach((r) => {
+      const tr = document.createElement('tr');
+      // 日付のフォーマット
+      const dateStr = r.timestamp
+        ? new Date(r.timestamp).toLocaleString('ja-JP', {
+            month: 'numeric',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: 'numeric',
+          })
+        : '';
+
+      // 各セルを生成 (編集可能なクラス名を付与し、フィールド情報を持たせる)
+      tr.innerHTML = `
+        <td>${dateStr}</td>
+        <td class="editable" data-row="${r.row}" data-key="condition">${r.condition || ''}</td>
+        <td class="editable" data-row="${r.row}" data-key="sleepHours">${r.sleepHours || ''}</td>
+        <td class="editable" data-row="${r.row}" data-key="routine">${r.routine || ''}</td>
+        <td class="editable" data-row="${r.row}" data-key="location">${r.location || ''}</td>
+        <td class="editable" data-row="${r.row}" data-key="content">${r.content || ''}</td>
+        <td class="editable" data-row="${r.row}" data-key="notes">${r.notes || ''}</td>
+        <td><!-- 保存ボタン用空領域(通常時は非表示) --></td>
+      `;
+
+      tbody.appendChild(tr);
+    });
+
+    // 編集イベントのバインド
+    bindEditEvents();
+  }
+
+  function bindEditEvents() {
+    const editableCells = document.querySelectorAll('td.editable');
+    editableCells.forEach((cell) => {
+      cell.addEventListener('dblclick', function () {
+        // すでに編集中ならスキップ
+        if (this.querySelector('input')) return;
+
+        const originalValue = this.textContent;
+        const rowId = this.getAttribute('data-row');
+        const colKey = this.getAttribute('data-key');
+        const parentTr = this.closest('tr');
+
+        // 入力フィールドの生成
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'edit-input';
+        input.value = originalValue;
+
+        this.innerHTML = '';
+        this.appendChild(input);
+        input.focus();
+
+        // 操作列に保存ボタンを表示
+        const actionCell = parentTr.querySelector('td:last-child');
+        // 他の編集中のセルがある場合の重複ボタン生成を防ぐ
+        if (!actionCell.querySelector('button')) {
+          const saveBtn = document.createElement('button');
+          saveBtn.className = 'save-btn';
+          saveBtn.textContent = '保存';
+
+          saveBtn.onclick = () => {
+            // 編集中の全インプットを収集して保存する拡張も可能だが、今回はシンプルに該当セルのみ保存する仕様とする
+            const newValue = input.value;
+            saveEdits(rowId, colKey, newValue, parentTr);
+          };
+          actionCell.appendChild(saveBtn);
+        }
+
+        // フォーカスアウト時（キャンセル処理）: 今回は保存ボタンを押した時のみ更新する仕様にするため、blurでの自動更新は避けるか、単純に元に戻す
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            const newValue = input.value;
+            saveEdits(rowId, colKey, newValue, parentTr);
+          } else if (e.key === 'Escape') {
+            this.textContent = originalValue;
+            actionCell.innerHTML = '';
+          }
+        });
+      });
+    });
+  }
+
+  /**
+   * GASバックエンドへレコードの更新を要求
+   */
+  function saveEdits(rowId, colKey, newValue, trElement) {
+    const actionCell = trElement.querySelector('td:last-child');
+    actionCell.innerHTML =
+      '<span style="font-size:12px;color:#6B7280;">保存中...</span>';
+
+    // UIを一旦新しい値で確定（オプティミスティックUI）
+    const targetTd = trElement.querySelector(`td[data-key="${colKey}"]`);
+    targetTd.textContent = newValue;
+
+    // allRecords 内のデータも更新しておく（フィルター切り替え時に戻らないように）
+    const recordIndex = appData.allRecords.findIndex((r) => r.row == rowId);
+    if (recordIndex !== -1) {
+      let parsedValue = newValue;
+      // 睡眠時間の場合は数値に変換
+      if (colKey === 'sleepHours') {
+        const num = parseFloat(
+          newValue.replace(/[０-９]/g, (s) =>
+            String.fromCharCode(s.charCodeAt(0) - 0xfee0)
+          )
+        );
+        parsedValue = isNaN(num) ? null : num;
+      }
+      appData.allRecords[recordIndex][colKey] = parsedValue;
+    }
+
+    ApiService.updateRecord(
+      rowId,
+      colKey,
+      newValue,
+      (res) => {
+        actionCell.innerHTML = '';
+        if (res.status === 'success') {
+          showToast(`更新完了: ${colKey}`, 'success');
+
+          // グラフ等にも反映させるために再描画処理を呼び出し。現在選択中のフィルター日数を再適用する
+          const activeBtn = document.querySelector('.filter-btn.active');
+          if (activeBtn) {
+            applyTimeFilter(activeBtn.getAttribute('data-days'));
+          }
+        } else {
+          showToast(`更新失敗: ${res.message}`, 'error');
+        }
+      },
+      (err) => {
+        actionCell.innerHTML = '';
+        showToast(`通信エラー: ${err.message}`, 'error');
+      }
+    );
+  }
+</script>

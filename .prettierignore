@@ -1,0 +1,7 @@
+node_modules/
+.clasp.json
+.claspignore
+appsscript.json
+playwright-report/
+test-results/
+.env
